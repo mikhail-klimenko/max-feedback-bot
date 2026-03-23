@@ -12,7 +12,7 @@ const bot = new Bot(token);
 // --- База Данных ---
 let db;
 (async () => {
-  db = await open({ filename: './database.sqlite', driver: sqlite3.Database });
+  db = await open({ filename: './data/database.sqlite', driver: sqlite3.Database });
   
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
