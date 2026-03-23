@@ -17,7 +17,7 @@
 ### 1. Клонирование репозитория
 
 ```bash
-git clone https://qa7.ru/Organization/max-feedback-bot.git
+git clone https://github.com/mikhail-klimenko/max-feedback-bot.git
 cd max-feedback-bot
 ```
 
