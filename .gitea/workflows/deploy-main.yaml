@@ -1,0 +1,53 @@
+name: Deploy bot
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+deploy:
+runs-on: ubuntu-latest
+
+container:
+  image: qa7.ru/kurchavovaleksey/actions-images:generic
+
+env:
+  SERVER: server-03d
+
+steps:
+  - name: Checkout Repository
+    uses: actions/checkout@v3
+
+  - name: Setup ssh access
+    run: |
+      mkdir -p ~/.ssh
+
+      cat << EOF > ~/.ssh/known_hosts
+      ${{ vars.known_hosts }}
+      EOF
+
+      cat << EOF > ~/.ssh/config
+      ${{ vars.ssh_config }}
+      EOF
+
+      cat << EOF > ~/.ssh/id_rsa
+      ${{ secrets.id_rsa }}
+      EOF
+
+      chmod 700 ~/.ssh
+      chmod 600 ~/.ssh/*
+
+  - name: Add docker context
+    run: |
+      docker context create server-03d --docker "host=ssh://root@server-03d"
+      docker context use "$SERVER"
+
+  - name: Deploy via docker compose
+    run: |
+      REPO=$(echo "$GITHUB_REPOSITORY" | cut -d '/' -f 2)
+      BRANCH=$(echo "$GITHUB_REF_NAME" | tr '/' '-')
+
+      export COMPOSE_PROJECT_NAME=${REPO}-${BRANCH}
+
+      docker compose -f docker-compose.yaml up -d --build
