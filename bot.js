@@ -1,7 +1,13 @@
 import 'dotenv/config';
-import { Bot } from '@maxhub/max-bot-api';
 import { open } from 'sqlite';
 import sqlite3 from 'sqlite3';
+import {
+  Bot,
+  ImageAttachment,
+  VideoAttachment,
+  AudioAttachment,
+  FileAttachment
+} from '@maxhub/max-bot-api';
 
 const token = process.env.BOT_TOKEN;
 const ownerId = Number(process.env.OWNER_ID);
@@ -12,7 +18,7 @@ const bot = new Bot(token);
 // --- База Данных ---
 let db;
 (async () => {
-  db = await open({ filename: './data/database.sqlite', driver: sqlite3.Database });
+  db = await open({ filename: './database.sqlite', driver: sqlite3.Database });
   
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -32,10 +38,35 @@ let db;
   console.log('База данных готова');
 })();
 
+// Преобразует входящие вложения в формат для отправки
+function prepareAttachments(attachments) {
+  if (!attachments || attachments.length === 0) return [];
+
+  return attachments.map(att => {
+    // Токен может быть в payload.token или просто в token
+    const fileToken = att.payload?.token || att.token;
+    if (!fileToken) return null;
+
+    switch (att.type) {
+      case 'image':
+        return new ImageAttachment({ token: fileToken }).toJson();
+      case 'video':
+        return new VideoAttachment({ token: fileToken }).toJson();
+      case 'audio':
+        return new AudioAttachment({ token: fileToken }).toJson();
+      case 'file':
+        return new FileAttachment({ token: fileToken }).toJson();
+      default:
+        return null;
+    }
+  }).filter(Boolean); 
+}
+
 bot.on('message_created', async (ctx) => {
   const msg = ctx.message;
   const senderId = msg.sender.user_id;
-  const text = msg.body.text;
+  const text = msg.body.text || '';
+  const attachments = msg.body.attachments;
 
   // 1. Если пишет ВЛАДЕЛЕЦ
   if (senderId === ownerId) {
@@ -50,33 +81,34 @@ bot.on('message_created', async (ctx) => {
       } catch (e) { return ctx.reply('Ошибка чтения БД'); }
     }
 
-    // ИСПРАВЛЕНО: msg.link вместо msg.body.link
+    // Обработка Reply
     if (msg.link && msg.link.type === 'reply') {
-      // ИСПРАВЛЕНО: путь к mid через msg.link.message.mid
       const repliedMsgMid = msg.link.message.mid; 
-      
-      console.log(`[REPLY] Ответ на сообщение: ${repliedMsgMid}`);
-      
       const target = await db.get('SELECT client_user_id FROM reply_map WHERE owner_msg_mid = ?', repliedMsgMid);
 
       if (target) {
         try {
-          await bot.api.sendMessageToUser(target.client_user_id, text);
-          return ctx.reply(`✅ Ответ отправлен пользователю ID: ${target.client_user_id}`);
+          const attachmentsToSend = prepareAttachments(attachments);
+          await bot.api.sendMessageToUser(target.client_user_id, text, { attachments: attachmentsToSend });
+          
+          let confirmation = `✅ Ответ отправлен ID: ${target.client_user_id}`;
+          if (attachmentsToSend.length > 0) confirmation += ` (с ${attachmentsToSend.length} влож.)`;
+          return ctx.reply(confirmation);
         } catch (e) {
-          console.error(e);
+          console.error('Ошибка отправки:', e);
           return ctx.reply('❌ Ошибка отправки.');
         }
       } else {
-        return ctx.reply('⚠️ Пользователь не найден в базе (возможно, старое сообщение).');
+        return ctx.reply('⚠️ Пользователь не найден в базе.');
       }
     }
 
     // Fallback
     if (global.lastClient && global.lastClient !== ownerId) {
       try {
-        await bot.api.sendMessageToUser(global.lastClient, text);
-        return ctx.reply(`✅ Отправлено последнему активному (${global.lastClient}).\n\nℹ️ Используйте Reply для точного ответа.`);
+        const attachmentsToSend = prepareAttachments(attachments);
+        await bot.api.sendMessageToUser(global.lastClient, text, { attachments: attachmentsToSend });
+        return ctx.reply(`✅ Отправлено последнему активному.`);
       } catch (e) {
         return ctx.reply('❌ Ошибка отправки.');
       }
@@ -93,12 +125,20 @@ bot.on('message_created', async (ctx) => {
 
     global.lastClient = senderId;
 
-    const forwardText = `📩 **Сообщение от ${msg.sender.first_name}** (ID: ${senderId}):\n\n${text}`;
-    
-    const sentMsg = await bot.api.sendMessageToUser(ownerId, forwardText, { format: 'markdown' });
+    let forwardText = `📩 **Сообщение от ${msg.sender.first_name}** (ID: ${senderId}):`;
+    if (text) forwardText += `\n\n${text}`;
+    if (attachments && attachments.length > 0) {  
+        forwardText += `\n\n_(присоединено файлов: ${attachments.length})_`;
+    }
+
+    const attachmentsToForward = prepareAttachments(attachments);
+
+    const sentMsg = await bot.api.sendMessageToUser(ownerId, forwardText, { 
+      format: 'markdown',
+      attachments: attachmentsToForward 
+    });
 
     if (sentMsg && sentMsg.body && sentMsg.body.mid) {
-        console.log(`[SAVE] MsgID: ${sentMsg.body.mid} -> UserID: ${senderId}`);
         await db.run('INSERT OR REPLACE INTO reply_map (owner_msg_mid, client_user_id) VALUES (?, ?)', 
           [sentMsg.body.mid, senderId]);
     }
